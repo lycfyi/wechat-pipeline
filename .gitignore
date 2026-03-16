@@ -1,0 +1,30 @@
+# Sensitive - never commit
+decrypt/wechat_keys.json
+decrypt/decrypted/
+sync/sync_state.json
+
+# Caches & build
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# Runtime data
+sync/chat_history/
+sync/logs/
+sync/api_data/
+sync/contact_data_cache.json
+sync/chat_db_upload_progress.json
+sync/chat_download_progress.json
+sync/cluster_report.json
+sync/group_earliest_dates.json
+
+# OS
+.DS_Store
+
+# IDE / cursor noise
+sync/.specstory/
+sync/.cursorindexingignore
+sync/.claude/
+decrypt/.specstory/

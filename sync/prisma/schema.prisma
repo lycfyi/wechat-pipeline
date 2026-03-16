@@ -1,0 +1,53 @@
+generator client {
+  provider = "prisma-client-py"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DIRECT_URL")
+}
+
+model ChatRoom {
+  id         String    @id @db.VarChar(500)
+  name       String    @default("") @db.VarChar(500)
+  isChatRoom Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  messages   Message[]
+
+  @@map("chat_rooms")
+}
+
+model User {
+  id        String    @id @db.VarChar(500)
+  name      String    @default("") @db.VarChar(500)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  messages  Message[]
+
+  @@map("users")
+}
+
+model Message {
+  seq            BigInt    @id
+  time           DateTime
+  content        String
+  type           Int
+  subType        Int       @map("sub_type")
+  isSelf         Boolean   @map("is_self")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  talkerId       String?   @map("talker_id") @db.VarChar(500)
+  senderId       String?   @map("sender_id") @db.VarChar(500)
+  additionalData Json?
+  sender         User?     @relation(fields: [senderId], references: [id], onDelete: Restrict)
+  chatRoom       ChatRoom? @relation(fields: [talkerId], references: [id], onDelete: Restrict)
+
+  @@index([time])
+  @@index([talkerId])
+  @@index([senderId])
+  @@index([type])
+  @@index([type, subType])
+  @@index([talkerId, time])
+  @@map("messages")
+}
