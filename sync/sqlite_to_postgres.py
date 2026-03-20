@@ -459,6 +459,29 @@ def sync_db(
             conn.close()
             return 0, 0
 
+        # ── DB-level fast skip ────────────────────────────────────────────────
+        # Find the maximum create_time across ALL Msg_* tables in this DB.
+        # If it's <= the minimum cursor we have for any table in this DB,
+        # there's nothing new — skip the entire file instantly.
+        db_state_keys = [k for k in state if k.startswith(f"{db_key}::")]
+        if db_state_keys:
+            min_state_cursor = min(state[k] for k in db_state_keys)
+            # Quick aggregate: union MAX per table via a single query per table
+            # Use sqlite_master to build a UNION ALL query
+            union_parts = [f"SELECT MAX(create_time) FROM [{t}]" for t in tables
+                           if f"{db_key}::{t}" in state]
+            if union_parts:
+                try:
+                    cur.execute(f"SELECT MAX(m) FROM ({' UNION ALL '.join(f'SELECT ({p}) as m' for p in union_parts)})")
+                    db_max_time = cur.fetchone()[0] or 0
+                    if db_max_time <= min_state_cursor:
+                        log.info(f"  {msg_db.name}: no new data (db_max={db_max_time} <= cursor={min_state_cursor}) — skipped")
+                        conn.close()
+                        return 0, 0
+                except Exception as e:
+                    log.debug(f"  {msg_db.name}: fast-skip check failed ({e}), proceeding normally")
+        # ─────────────────────────────────────────────────────────────────────
+
         pg_cur = None if dry_run else pg_conn.cursor()
 
         # Cache self contact id
@@ -475,14 +498,6 @@ def sync_db(
             is_chat_room = wxid.endswith("@chatroom")
             talker_id = wxid
             display_name = sessions.get(wxid, wxid)
-
-            # Upsert talker into chat_rooms
-            if not dry_run:
-                try:
-                    upsert_chat_room(pg_cur, wxid, display_name, is_chat_room)
-                except Exception as e:
-                    log.debug(f"  upsert_chat_room {wxid}: {e}")
-                    pg_conn.rollback()
 
             table_key = f"{db_key}::{table_name}"
             last_time = state.get(table_key, 0)
@@ -512,6 +527,17 @@ def sync_db(
             except Exception as e:
                 log.error(f"  Query {table_name}: {e}")
                 continue
+
+            if not rows:
+                continue  # skip upsert_chat_room and all downstream work
+
+            # Upsert talker into chat_rooms only when there's actual new data
+            if not dry_run:
+                try:
+                    upsert_chat_room(pg_cur, wxid, display_name, is_chat_room)
+                except Exception as e:
+                    log.debug(f"  upsert_chat_room {wxid}: {e}")
+                    pg_conn.rollback()
 
             max_time = last_time
             table_inserted = 0
