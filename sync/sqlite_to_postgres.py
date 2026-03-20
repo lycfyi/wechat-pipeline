@@ -32,10 +32,10 @@ except ImportError:
     _ZSTD_AVAILABLE = False
 
 # ─── Configuration ─────────────────────────────────────────────────────────────
-DECRYPTED_DIR = Path.home() / "codebase/wechat-db-decrypt-macos/decrypted"
+DECRYPTED_DIR = Path.home() / "codebase/wechat-pipeline/decrypt/decrypted"
 SCRIPT_DIR = Path(__file__).parent
 STATE_FILE = SCRIPT_DIR / "sync_state.json"
-POSTGRES_DSN = "postgresql://root:gmu4K8wEY2efGP5k90il1VX7I3T6JLBh@sjc1.clusters.zeabur.com:30929/postgres"
+POSTGRES_DSN = "postgresql://root:4Q57yX1ea0Hnip892kfWUNPOKJhtA36r@172.232.188.55:30928/zeabur"
 
 # Self wxid — extracted from DB directory name "leon-eternity_3758"
 SELF_WXID = "leon-eternity"
@@ -198,7 +198,7 @@ def load_contacts(contact_db: Path) -> Dict[int, dict]:
         log.warning(f"contact.db not found: {contact_db}")
         return contacts
     try:
-        conn = sqlite3.connect(f"file:{contact_db}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"file:{contact_db}?mode=ro&immutable=1", uri=True)
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
 
@@ -256,7 +256,7 @@ def load_sessions(session_db: Path) -> Dict[str, str]:
         log.warning(f"session.db not found: {session_db}")
         return sessions
     try:
-        conn = sqlite3.connect(f"file:{session_db}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"file:{session_db}?mode=ro&immutable=1", uri=True)
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
 
@@ -302,7 +302,7 @@ def load_name2id(msg_db: Path) -> Dict[str, str]:
     """
     mapping: Dict[str, str] = {}
     try:
-        conn = sqlite3.connect(f"file:{msg_db}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"file:{msg_db}?mode=ro&immutable=1", uri=True)
         cur = conn.cursor()
         cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='Name2Id'")
         if not cur.fetchone():
@@ -439,7 +439,11 @@ def sync_db(
     total_inserted = 0
 
     try:
-        conn = sqlite3.connect(f"file:{msg_db}?mode=ro", uri=True)
+        # immutable=1 avoids WAL checkpoint on readonly files held by WeChat
+        try:
+            conn = sqlite3.connect(f"file:{msg_db}?mode=ro&immutable=1", uri=True)
+        except Exception:
+            conn = sqlite3.connect(f"file:{msg_db}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
 
@@ -722,6 +726,21 @@ def main():
             log.warning(f"Missing DB: {db}")
             continue
         log.info(f"\n▶ Processing {db.name} …")
+
+        # Re-connect per DB to avoid max_locks_per_transaction overflow on Zeabur PG
+        if not args.dry_run:
+            try:
+                if pg_conn and not pg_conn.closed:
+                    pg_conn.close()
+            except Exception:
+                pass
+            try:
+                pg_conn = psycopg2.connect(POSTGRES_DSN)
+                pg_conn.autocommit = False
+            except Exception as e:
+                log.error(f"PG reconnect failed before {db.name}: {e}")
+                continue
+
         p, i = sync_db(
             db, contacts, contacts_un, sessions,
             pg_conn, state,
@@ -733,7 +752,7 @@ def main():
         log.info(f"  {db.name}: processed={p}  inserted={i}")
         save_state(state)  # checkpoint after each DB
 
-    if pg_conn:
+    if pg_conn and not getattr(pg_conn, 'closed', True):
         pg_conn.close()
 
     log.info(f"\n{'=' * 60}")
